@@ -324,6 +324,39 @@ async def process_status(message: Message, state: FSMContext):
         await state.update_data(loss=details_text, json_details=json_str)
         await state.set_state(ReportForm.photo)
         await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+    elif status_text == "Out of order":
+        data = await state.get_data()
+        room = data['room']
+        status = status_text
+        loss = ""
+        json_details = ""
+        
+        # 1. Сохранение в локальную SQLite (без фото)
+        conn = sqlite3.connect(DB_FILE)
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT OR REPLACE INTO rooms (room_number, status, details, photo_id, json_details) VALUES (?, ?, ?, ?, ?)", 
+            (room, status, loss, "", json_details)
+        )
+        conn.commit()
+        conn.close()
+        
+        # 2. Асинхронный бэкап базы данных в Cloudflare R2
+        asyncio.create_task(r2.upload_db(DB_FILE))
+
+        all_summary = get_all_rooms_summary()
+        report_text = (
+            f"📦 **მინი-ბარის ანგარიში**\n\n"
+            f"🏨 ნომერი: {room}\n"
+            f"🔴 სტატუსი: {status}\n"
+            f"👤 თანამშრომელი: {message.from_user.full_name}\n\n"
+            f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
+            f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
+        )
+        
+        await message.bot.send_message(REPORT_CHAT_ID, text=report_text)
+        await message.answer("ანგარიში წარმატებით გაიგზავნა!", reply_markup=ReplyKeyboardRemove())
+        await state.clear()
     else:
         await state.update_data(loss="", json_details="")
         await state.set_state(ReportForm.photo)
