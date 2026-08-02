@@ -324,7 +324,7 @@ async def process_status(message: Message, state: FSMContext):
         await state.update_data(loss=details_text, json_details=json_str)
         await state.set_state(ReportForm.photo)
         await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
-    elif status_text == "Out of order":
+    elif "out of order" in status_text.lower():
         data = await state.get_data()
         room = data['room']
         status = status_text
