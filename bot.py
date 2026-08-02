@@ -209,7 +209,10 @@ async def cmd_audit(message: Message, bot: Bot):
         audit_text = f"🔍 **აუდიტი ნომრისთვის {room_to_check}:**\n• სტატუსი: {status}"
 
     if photo_id:
-        await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text)
+        try:
+            await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text)
+        except Exception:
+            await message.answer(audit_text)
     else:
         await message.answer(audit_text)
 
@@ -325,38 +328,7 @@ async def process_status(message: Message, state: FSMContext):
         await state.set_state(ReportForm.photo)
         await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
     elif "out of order" in status_text.lower():
-        data = await state.get_data()
-        room = data['room']
-        status = status_text
-        loss = ""
-        json_details = ""
-        
-        # 1. Сохранение в локальную SQLite (без фото)
-        conn = sqlite3.connect(DB_FILE)
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT OR REPLACE INTO rooms (room_number, status, details, photo_id, json_details) VALUES (?, ?, ?, ?, ?)", 
-            (room, status, loss, "", json_details)
-        )
-        conn.commit()
-        conn.close()
-        
-        # 2. Асинхронный бэкап базы данных в Cloudflare R2
-        asyncio.create_task(r2.upload_db(DB_FILE))
-
-        all_summary = get_all_rooms_summary()
-        report_text = (
-            f"📦 **მინი-ბარის ანგარიში**\n\n"
-            f"🏨 ნომერი: {room}\n"
-            f"🔴 სტატუსი: {status}\n"
-            f"👤 თანამშრომელი: {message.from_user.full_name}\n\n"
-            f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
-            f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
-        )
-        
-        await message.bot.send_message(REPORT_CHAT_ID, text=report_text)
-        await message.answer("ანგარიში წარმატებით გაიგზავნა!", reply_markup=ReplyKeyboardRemove())
-        await state.clear()
+        await save_and_send_report(message, state, message.bot, photo_id=None)
     else:
         await state.update_data(loss="", json_details="")
         await state.set_state(ReportForm.photo)
@@ -412,21 +384,28 @@ async def process_inventory_confirm(callback: CallbackQuery, state: FSMContext):
     await callback.message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
     await callback.answer()
 
-@router.message(ReportForm.photo, F.photo)
-async def process_photo(message: Message, state: FSMContext, bot: Bot):
+# Ручная передача наименований расхода текстом в стадии loss
+@router.message(ReportForm.loss, F.text)
+async def process_loss_text(message: Message, state: FSMContext):
+    text = message.text.strip()
+    await state.update_data(loss=f"გამოყენებულია: {text}")
+    await state.set_state(ReportForm.photo)
+    await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
+
+# Единая функция сохранения и отправки отчета
+async def save_and_send_report(message: Message, state: FSMContext, bot: Bot, photo_id: str = None):
     data = await state.get_data()
-    room = data['room']
-    status = data['status']
+    room = data.get('room', 'Н/Д')
+    status = data.get('status', 'Н/Д')
     loss = data.get('loss', "")
     json_details = data.get('json_details', "")
-    photo_id = message.photo[-1].file_id
     
     # 1. Сохранение в локальную SQLite
     conn = sqlite3.connect(DB_FILE)
     cursor = conn.cursor()
     cursor.execute(
         "INSERT OR REPLACE INTO rooms (room_number, status, details, photo_id, json_details) VALUES (?, ?, ?, ?, ?)", 
-        (room, status, loss, photo_id, json_details)
+        (room, status, loss, photo_id or "", json_details)
     )
     conn.commit()
     conn.close()
@@ -435,14 +414,15 @@ async def process_photo(message: Message, state: FSMContext, bot: Bot):
     asyncio.create_task(r2.upload_db(DB_FILE))
 
     # 3. Асинхронное сохранение фотографии в Cloudflare R2
-    try:
-        photo_file = await bot.get_file(photo_id)
-        photo_bytes_io = await bot.download_file(photo_file.file_path)
-        if photo_bytes_io:
-            photo_bytes = photo_bytes_io.read()
-            asyncio.create_task(r2.upload_photo(photo_bytes, f"photos/room_{room}_{photo_id}.jpg"))
-    except Exception as e:
-        logging.error(f"Не удалось загрузить фото в R2: {e}")
+    if photo_id:
+        try:
+            photo_file = await bot.get_file(photo_id)
+            photo_bytes_io = await bot.download_file(photo_file.file_path)
+            if photo_bytes_io:
+                photo_bytes = photo_bytes_io.read()
+                asyncio.create_task(r2.upload_photo(photo_bytes, f"photos/room_{room}_{photo_id}.jpg"))
+        except Exception as e:
+            logging.error(f"Не удалось загрузить фото в R2: {e}")
 
     all_summary = get_all_rooms_summary()
     
@@ -466,9 +446,28 @@ async def process_photo(message: Message, state: FSMContext, bot: Bot):
             f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
         )
     
-    await bot.send_photo(REPORT_CHAT_ID, photo=photo_id, caption=report_text)
-    await message.answer("ანგარიში წარმატებით გაიგზავნა!")
+    try:
+        if photo_id:
+            await bot.send_photo(REPORT_CHAT_ID, photo=photo_id, caption=report_text)
+        else:
+            await bot.send_message(REPORT_CHAT_ID, text=report_text)
+    except Exception as e:
+        logging.error(f"Не удалось отправить отчет в чат {REPORT_CHAT_ID}: {e}")
+
+    await message.answer("ანგარიში წარმატებით გაიგზავნა!", reply_markup=ReplyKeyboardRemove())
     await state.clear()
+
+# Универсальный обработчик получения фото или документа-картинки
+@router.message(ReportForm.loss, F.photo | F.document)
+@router.message(ReportForm.photo, F.photo | F.document)
+async def process_photo(message: Message, state: FSMContext, bot: Bot):
+    photo_id = None
+    if message.photo:
+        photo_id = message.photo[-1].file_id
+    elif message.document:
+        photo_id = message.document.file_id
+        
+    await save_and_send_report(message, state, bot, photo_id)
 
 # --- HTTP СЕРВЕР ДЛЯ RENDER И UPTIMEROBOT ---
 async def handle_healthcheck(request):
