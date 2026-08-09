@@ -598,7 +598,6 @@ def is_supervisor(user_id: int) -> bool:
 
 
 # --- ГЛАВНОЕ МЕНЮ (кнопки вместо команд) ---
-BTN_CHECK = "🏨 შემოწმება"
 BTN_STATUS = "📊 სტატუსი"
 BTN_HELP = "ℹ️ დახმარება"
 BTN_PRODUCT = "📦 პროდუქცია"
@@ -607,7 +606,7 @@ BTN_CATALOG = "🛒 კატალოგი"
 BTN_CLOSE_SHIFT = "🗑 ცვლის დახურვა"
 
 MENU_BUTTONS = {
-    BTN_CHECK, BTN_STATUS, BTN_HELP, BTN_PRODUCT,
+    BTN_STATUS, BTN_HELP, BTN_PRODUCT,
     BTN_PHOTOS, BTN_CATALOG, BTN_CLOSE_SHIFT,
 }
 
@@ -615,8 +614,7 @@ MENU_BUTTONS = {
 def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     """Главное меню. Состав кнопок зависит от роли пользователя."""
     rows = [
-        [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_STATUS)],
-        [KeyboardButton(text=BTN_HELP)],
+        [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
     ]
     if is_supervisor(user_id):
         rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_PHOTOS)])
@@ -674,10 +672,9 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
-    await state.set_state(ReportForm.room_number)
     await message.answer(
-        "გამარჯობა! გთხოვთ, შეიყვანეთ ნომრის ნომერი (მაგალითად: 605):",
-        reply_markup=ReplyKeyboardRemove()
+        "გამარჯობა! აირჩიეთ მოქმედება ღილაკებით 👇",
+        reply_markup=main_menu_kb(message.from_user.id)
     )
 
 
@@ -705,22 +702,9 @@ async def cmd_myid(message: Message):
 async def cmd_help(message: Message):
     text = (
         "📖 <b>ინსტრუქცია / Инструкция</b>\n\n"
-        "<b>🧹 თანამშრომლებისთვის / Для персонала:</b>\n"
-        "1️⃣ დააჭირეთ /start და შეიყვანეთ ნომრის ნომერი (მაგ: 605)\n"
-        "      Нажмите /start и введите номер комнаты\n"
-        "2️⃣ აირჩიეთ სტატუსი ღილაკით\n"
-        "      Выберите статус кнопкой:\n"
-        f"      🟢 {STATUS_FULL} — всё на месте\n"
-        f"      🟡 {STATUS_NOT_FULL} — что-то выпито\n"
-        f"      🔴 {STATUS_EMPTY} — пусто\n"
-        "      🚧 Out of order — номер недоступен\n"
-        "3️⃣ თუ 🟡 — მონიშნეთ რა აკლია და დააჭირეთ ✅ დადასტურება\n"
-        "      Если 🟡 — отметьте выпитое в каталоге и нажмите ✅\n"
-        "4️⃣ გამოაგზავნეთ მინი-ბარის ფოტო\n"
-        "      Отправьте фото мини-бара — отчёт уйдёт автоматически\n\n"
-        "❌ გაუქმება / Отменить проверку: /cancel\n"
-        "📊 ყველა ნომრის სია / Список номеров: /status\n"
-        "🆔 ჩემი ID / Мой ID: /myid\n\n"
+        "🔍 /audit <code>605</code> — ნომრის აუდიტი (Аудит номера)\n"
+        "📊 /status — ყველა ნომრის სია (Список номеров)\n"
+        "🆔 /myid — ჩემი ID (Мой Telegram ID)\n\n"
         "⌨️ ყველა მოქმედება ხელმისაწვდომია მენიუს ღილაკებით ქვემოთ\n"
         "      (Все действия доступны кнопками меню под строкой ввода)"
     )
@@ -1120,9 +1104,7 @@ async def cmd_renameitem(message: Message):
 @router.message(StateFilter(None), F.text.in_(MENU_BUTTONS))
 async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
     text = message.text
-    if text == BTN_CHECK:
-        await cmd_start(message, state)
-    elif text == BTN_STATUS:
+    if text == BTN_STATUS:
         await cmd_status(message)
     elif text == BTN_HELP:
         await cmd_help(message)
@@ -1501,12 +1483,11 @@ async def main():
     dp.include_router(router)
 
     commands = [
-        BotCommand(command="start", description="შემოწმების დაწყება (Начать проверку)"),
-        BotCommand(command="cancel", description="შემოწმების გაუქმება (Отменить проверку)"),
-        BotCommand(command="help", description="ინსტრუქცია (Инструкция)"),
-        BotCommand(command="status", description="ყველა ნომრის სტატუსი (Общий статус)"),
-        BotCommand(command="myid", description="ჩემი ID (Мой Telegram ID)"),
+        BotCommand(command="start", description="მთავარი მენიუ (Главное меню)"),
         BotCommand(command="audit", description="ნომრის აუდიტი (Аудит номера /audit <номер>)"),
+        BotCommand(command="status", description="ყველა ნომრის სტატუსი (Общий статус)"),
+        BotCommand(command="help", description="ინსტრუქცია (Инструкция)"),
+        BotCommand(command="myid", description="ჩემი ID (Мой Telegram ID)"),
         BotCommand(command="product", description="პროდუქციის ანგარიში (Отчет по продукции)"),
         BotCommand(command="photos", description="ცვლის ფოტოები (Фото смены)"),
         BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)"),
