@@ -598,23 +598,29 @@ def is_supervisor(user_id: int) -> bool:
 
 
 # --- ГЛАВНОЕ МЕНЮ (кнопки вместо команд) ---
+BTN_CHECK = "🏨 შემოწმება"
 BTN_STATUS = "📊 სტატუსი"
 BTN_HELP = "ℹ️ დახმარება"
+BTN_AUDIT = "🔍 აუდიტი"
 BTN_PRODUCT = "📦 პროდუქცია"
 BTN_CATALOG = "🛒 კატალოგი"
 
 MENU_BUTTONS = {
-    BTN_STATUS, BTN_HELP, BTN_PRODUCT, BTN_CATALOG,
+    BTN_CHECK, BTN_STATUS, BTN_HELP,
+    BTN_AUDIT, BTN_PRODUCT, BTN_CATALOG,
 }
 
 
 def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     """Главное меню. Состав кнопок зависит от роли пользователя."""
     rows = [
-        [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
+        [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_STATUS)],
     ]
     if is_supervisor(user_id):
-        rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_CATALOG)])
+        rows.append([KeyboardButton(text=BTN_AUDIT), KeyboardButton(text=BTN_PRODUCT)])
+        rows.append([KeyboardButton(text=BTN_CATALOG), KeyboardButton(text=BTN_HELP)])
+    else:
+        rows.append([KeyboardButton(text=BTN_HELP)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -655,6 +661,10 @@ class ReportForm(StatesGroup):
     photo = State()
 
 
+class AuditForm(StatesGroup):
+    room_number = State()
+
+
 class ClearForm(StatesGroup):
     confirm = State()
 
@@ -666,9 +676,10 @@ router = Router()
 @router.message(Command("start"))
 async def cmd_start(message: Message, state: FSMContext):
     await state.clear()
+    await state.set_state(ReportForm.room_number)
     await message.answer(
-        "გამარჯობა! აირჩიეთ მოქმედება ღილაკებით 👇",
-        reply_markup=main_menu_kb(message.from_user.id)
+        "გამარჯობა! გთხოვთ, შეიყვანეთ ნომრის ნომერი (მაგალითად: 605):",
+        reply_markup=ReplyKeyboardRemove()
     )
 
 
@@ -696,17 +707,22 @@ async def cmd_myid(message: Message):
 async def cmd_help(message: Message):
     text = (
         "📖 <b>ინსტრუქცია / Инструкция</b>\n\n"
-        "🔍 /audit <code>605</code> — ნომრის აუდიტი (Аудит номера)\n"
-        "📊 /status — ყველა ნომრის სია (Список номеров)\n"
-        "🆔 /myid — ჩემი ID (Мой Telegram ID)\n\n"
-        "⌨️ ყველა მოქმედება ხელმისაწვდომია მენიუს ღილაკებით ქვემოთ\n"
-        "      (Все действия доступны кнопками меню под строкой ввода)"
+        "<b>🧹 თანამშრომლებისთვის / Для персонала:</b>\n"
+        "1️⃣ დააჭირეთ /start ან 🏨 შემოწმება და შეიყვანეთ ნომრის ნომერი (მაგ: 605)\n"
+        "2️⃣ აირჩიეთ სტატუსი ღილაკით\n"
+        f"      🟢 {STATUS_FULL} · 🟡 {STATUS_NOT_FULL} · 🔴 {STATUS_EMPTY} · 🚧 Out of order\n"
+        "3️⃣ თუ 🟡 — მონიშნეთ რა აკლია და დააჭირეთ ✅ დადასტურება\n"
+        "4️⃣ გამოაგზავნეთ მინი-ბარის ფოტო — ანგარიში გაიგზავნება ავტომატურად\n\n"
+        "❌ გაუქმება: /cancel\n"
+        "📊 ყველა ნომრის სია: /status\n"
+        "🆔 ჩემი ID: /myid\n\n"
+        "⌨️ ყველა მოქმედება ხელმისაწვდომია მენიუს ღილაკებით ქვემოთ"
     )
 
     if is_supervisor(message.from_user.id):
         text += (
             "\n\n<b>👔 სუპერვაიზერებისთვის / Для супервайзеров:</b>\n"
-            "• /audit <code>605</code> — детали и фото по номеру\n"
+            "• /audit <code>605</code> (ან ღილაკი 🔍 აუდიტი) — детали и фото по номеру\n"
             "• /product — сколько продукции осталось в номерах\n"
             "• /photos — все фото смены альбомом\n"
             "• /catalog — текущий ассортимент и цены"
@@ -715,10 +731,9 @@ async def cmd_help(message: Message):
         text += (
             "\n\n<b>🔧 ადმინისთვის / Для администратора:</b>\n"
             "• /clear — закрыть смену (подтверждение словом: <code>წაშლა</code> / <code>УДАЛИТЬ</code>)\n"
-            "• /additem <code>Red Bull 2</code> — добавить товар (эталон 2 шт)\n"
-            "• /setqty <code>Wine 2</code> — изменить эталонное количество\n"
-            f"• /setprice <code>Wine 25.50</code> — цена в {CURRENCY} (0 — убрать)\n"
-            "• /renameitem <code>Cola Clasic | Cola Classic</code> — переименовать\n"
+            "• /additem <code>Red Bull 2</code> — добавить товар\n"
+            "• /setqty <code>Wine 2</code> — изменить количество\n"
+            f"• /setprice <code>Wine 25.50</code> — цена в {CURRENCY}\n"
             "• /delitem <code>Red Bull</code> — убрать товар из каталога"
         )
         if AUTO_CLEAR_TIME:
@@ -734,19 +749,7 @@ async def cmd_status(message: Message):
     await answer_chunked(message, status_message, reply_markup=main_menu_kb(message.from_user.id))
 
 
-@router.message(Command("audit"))
-async def cmd_audit(message: Message, bot: Bot):
-    if not is_supervisor(message.from_user.id):
-        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
-        return
-
-    args = (message.text or "").split(maxsplit=1)
-    if len(args) < 2:
-        await message.answer("⚠️ გთხოვთ, მიუთითოთ ნომერი. მაგალითად: <code>/audit 605</code>")
-        return
-
-    room_to_check = args[1].strip()
-
+async def perform_audit(message: Message, room_to_check: str, bot: Bot):
     with closing(db_connect()) as conn:
         row = conn.execute(
             "SELECT status, details, photo_id, photo_type, checked_by, checked_at, json_details "
@@ -754,8 +757,10 @@ async def cmd_audit(message: Message, bot: Bot):
             (room_to_check,)
         ).fetchone()
 
+    menu = main_menu_kb(message.from_user.id)
+
     if not row:
-        await message.answer(f"❌ ნომერი {esc(room_to_check)} ბაზაში ვერ მოიძებნა ან ჯერ არ შემოწმებულა.")
+        await message.answer(f"❌ ნომერი {esc(room_to_check)} ბაზაში ვერ მოიძებნა ან ჯერ არ შემოწმებულა.", reply_markup=menu)
         return
 
     status, details, photo_id, photo_type, checked_by, checked_at, json_details = row
@@ -777,13 +782,39 @@ async def cmd_audit(message: Message, bot: Bot):
     if photo_id:
         try:
             if photo_type == "document":
-                await bot.send_document(message.chat.id, document=photo_id, caption=audit_text)
+                await bot.send_document(message.chat.id, document=photo_id, caption=audit_text, reply_markup=menu)
             else:
-                await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text)
+                await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text, reply_markup=menu)
         except Exception:
-            await message.answer(audit_text)
+            await message.answer(audit_text, reply_markup=menu)
     else:
-        await message.answer(audit_text)
+        await message.answer(audit_text, reply_markup=menu)
+
+
+@router.message(Command("audit"))
+@router.message(F.text == BTN_AUDIT)
+async def cmd_audit(message: Message, state: FSMContext, bot: Bot):
+    if not is_supervisor(message.from_user.id):
+        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
+        return
+
+    args = (message.text or "").split(maxsplit=1)
+    if len(args) >= 2 and args[0].startswith("/audit"):
+        await perform_audit(message, args[1].strip(), bot)
+        return
+
+    await state.set_state(AuditForm.room_number)
+    await message.answer(
+        "🔍 <b>გთხოვთ, შეიყვანეთ ნომერი აუდიტისთვის:</b>\n(например: 605)",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+
+@router.message(AuditForm.room_number, F.text)
+async def process_audit_room(message: Message, state: FSMContext, bot: Bot):
+    room = (message.text or "").strip()
+    await state.clear()
+    await perform_audit(message, room, bot)
 
 
 @router.message(Command("product", "Product"))
@@ -1098,10 +1129,14 @@ async def cmd_renameitem(message: Message):
 @router.message(StateFilter(None), F.text.in_(MENU_BUTTONS))
 async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
     text = message.text
-    if text == BTN_STATUS:
+    if text == BTN_CHECK:
+        await cmd_start(message, state)
+    elif text == BTN_STATUS:
         await cmd_status(message)
     elif text == BTN_HELP:
         await cmd_help(message)
+    elif text == BTN_AUDIT:
+        await cmd_audit(message, state, bot)
     elif text == BTN_PRODUCT:
         await cmd_product(message)
     elif text == BTN_CATALOG:
@@ -1473,13 +1508,14 @@ async def main():
     dp.include_router(router)
 
     commands = [
-        BotCommand(command="start", description="მთავარი მენიუ (Главное меню)"),
+        BotCommand(command="start", description="შემოწმების დაწყება (Начать проверку)"),
         BotCommand(command="audit", description="ნომრის აუდიტი (Аудит номера /audit <номер>)"),
         BotCommand(command="status", description="ყველა ნომრის სტატუსი (Общий статус)"),
         BotCommand(command="help", description="ინსტრუქცია (Инструкция)"),
         BotCommand(command="myid", description="ჩემი ID (Мой Telegram ID)"),
         BotCommand(command="product", description="პროდუქციის ანგარიში (Отчет по продукции)"),
-        BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)")
+        BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)"),
+        BotCommand(command="clear", description="ცვლის დახურვა (Закрыть смену)")
     ]
     try:
         await bot.set_my_commands(commands)
