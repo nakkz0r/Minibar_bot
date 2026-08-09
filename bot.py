@@ -94,7 +94,7 @@ def get_all_rooms_summary():
         cursor.execute("ALTER TABLE rooms ADD COLUMN json_details TEXT")
         conn.commit()
 
-    cursor.execute("SELECT room_number, status, details, json_details FROM rooms ORDER BY room_number")
+    cursor.execute("SELECT room_number, status, details FROM rooms ORDER BY room_number")
     rows = cursor.fetchall()
     conn.close()
     
@@ -102,10 +102,9 @@ def get_all_rooms_summary():
         return "პარამეტრები ჯერ არ არის შევსებული."
     
     summary_lines = []
-    total_restock = {}
 
     for row in rows:
-        room, status, details, json_str = row[0], row[1], row[2], row[3]
+        room, status, details = row[0], row[1], row[2]
         if status in ("ცარიელია", "ცარიელია სტუმარმა ითხოვა გამოტანა"):
             disp_status = "ცარიელია სტუმარმა ითხოვა გამოტანა"
             summary_lines.append(f"• <b>ნომერი {room}</b>: {disp_status}")
@@ -114,21 +113,7 @@ def get_all_rooms_summary():
         else:
             summary_lines.append(f"• <b>ნომერი {room}</b>: {status}")
 
-        if json_str:
-            try:
-                item_dict = json.loads(json_str)
-                for item_name, qty in item_dict.items():
-                    total_restock[item_name] = total_restock.get(item_name, 0) + qty
-            except Exception:
-                pass
-
-    result = "\n".join(summary_lines)
-    if total_restock:
-        restock_items_str = "\n".join([f"  • {item}: {qty} ცალი" for item, qty in sorted(total_restock.items())])
-        total_qty = sum(total_restock.values())
-        result += f"\n\n📦 <b>სულ შესავსებია საწყობიდან (Всего для пополнения): {total_qty} шт.</b>\n{restock_items_str}"
-    
-    return result
+    return "\n".join(summary_lines)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ КНОПКИ ИНВЕНТАРИЗАЦИИ ---
 def build_inventory_keyboard(selected_items: dict):
