@@ -310,7 +310,8 @@ async def process_status(message: Message, state: FSMContext):
         json_str = json.dumps(full_missing)
         
         await state.update_data(loss=details_text, json_details=json_str)
-        await save_and_send_report(message, state, message.bot, photo_id=None)
+        await state.set_state(ReportForm.photo)
+        await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
     elif status_text == "არ არის შევსებული":
         await state.update_data(status=status_text)
         await state.set_state(ReportForm.loss)
