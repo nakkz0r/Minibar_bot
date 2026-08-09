@@ -5,9 +5,9 @@
 #     /cancel, надёжные бэкапы R2.
 #  v2: эмодзи-статусы 🟢🟡🔴🚧, /help,
 #     каталог в базе (/catalog, /additem, /setqty, /renameitem, /delitem).
-#  v3: цены и счёт гостя (/setprice), /setrooms + /remaining,
-#     автоматизация смены (AUTO_CLEAR_TIME), /history,
-#     /stats, защита от перезаписи номера, /myid, ошибки админам в личку,
+#  v3: цены и счёт гостя (/setprice),
+#     автоматизация смены (AUTO_CLEAR_TIME),
+#     защита от перезаписи номера, /myid, ошибки админам в личку,
 #     /photos.
 #  v4:
 #   • Главное меню кнопками (по ролям) — команды набирать не обязательно
@@ -102,8 +102,6 @@ try:
 except ValueError:
     logging.critical("REPORT_CHAT_ID должен быть числом (ID чата, например -1001234567890).")
     sys.exit(1)
-
-SUPERVISORS = (os.getenv("SUPERVISORS") or "").strip()
 
 ADMIN_IDS = _parse_ids("ADMIN_IDS")
 SUPERVISORS_IDS = _parse_ids("SUPERVISORS_IDS")
@@ -244,12 +242,6 @@ def init_db():
             logging.info("Каталог товаров заполнен эталонным составом (первый запуск).")
 
         conn.execute("""
-            CREATE TABLE IF NOT EXISTS hotel_rooms (
-                room_number TEXT PRIMARY KEY
-            )
-        """)
-
-        conn.execute("""
             CREATE TABLE IF NOT EXISTS history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 closed_at TEXT,
@@ -343,7 +335,7 @@ def get_all_rooms_summary() -> str:
         counts[emoji] += 1
         if status in ("ცარიელია", STATUS_EMPTY):
             summary_lines.append(
-                f"{emoji} <b>{esc(room)}</b> — აკლია: სრული მინი-ბარი ({total_units} ერთ.)"
+                f"{emoji} <b>{esc(room)}</b> — აკლია: სრული მინი-ბარის პროდუქცია ({total_units} ერთ.)"
             )
         elif status == STATUS_NOT_FULL:
             missing = _format_missing(json_str, details)
@@ -357,26 +349,6 @@ def get_all_rooms_summary() -> str:
     counter_parts = [f"{emoji} {n}" for emoji, n in counts.items() if n > 0]
     header = f"<b>{' · '.join(counter_parts)}</b> — სულ: {len(rows)}"
     return header + "\n\n" + "\n".join(summary_lines)
-
-
-def get_remaining_rooms():
-    with closing(db_connect()) as conn:
-        hotel = [r[0] for r in conn.execute(
-            "SELECT room_number FROM hotel_rooms "
-            "ORDER BY CAST(room_number AS INTEGER), room_number"
-        ).fetchall()]
-        checked = {r[0] for r in conn.execute("SELECT room_number FROM rooms").fetchall()}
-    remaining = [room for room in hotel if room not in checked]
-    return len(hotel), len(hotel) - len(remaining), remaining
-
-
-def get_staff_stats() -> list:
-    with closing(db_connect()) as conn:
-        return conn.execute(
-            "SELECT checked_by, COUNT(*) AS c FROM rooms "
-            "WHERE checked_by IS NOT NULL AND checked_by != '' "
-            "GROUP BY checked_by ORDER BY c DESC, checked_by"
-        ).fetchall()
 
 
 def aggregate_present(rows, catalog: dict):
@@ -628,18 +600,15 @@ def is_supervisor(user_id: int) -> bool:
 # --- ГЛАВНОЕ МЕНЮ (кнопки вместо команд) ---
 BTN_CHECK = "🏨 შემოწმება"
 BTN_STATUS = "📊 სტატუსი"
-BTN_REMAINING = "🕳 დარჩენილი"
 BTN_HELP = "ℹ️ დახმარება"
 BTN_PRODUCT = "📦 პროდუქცია"
-BTN_STATS = "🏆 სტატისტიკა"
 BTN_PHOTOS = "📷 ფოტოები"
-BTN_HISTORY = "🗂 ისტორია"
 BTN_CATALOG = "🛒 კატალოგი"
 BTN_CLOSE_SHIFT = "🗑 ცვლის დახურვა"
 
 MENU_BUTTONS = {
-    BTN_CHECK, BTN_STATUS, BTN_REMAINING, BTN_HELP, BTN_PRODUCT,
-    BTN_STATS, BTN_PHOTOS, BTN_HISTORY, BTN_CATALOG, BTN_CLOSE_SHIFT,
+    BTN_CHECK, BTN_STATUS, BTN_HELP, BTN_PRODUCT,
+    BTN_PHOTOS, BTN_CATALOG, BTN_CLOSE_SHIFT,
 }
 
 
@@ -647,11 +616,10 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
     """Главное меню. Состав кнопок зависит от роли пользователя."""
     rows = [
         [KeyboardButton(text=BTN_CHECK), KeyboardButton(text=BTN_STATUS)],
-        [KeyboardButton(text=BTN_REMAINING), KeyboardButton(text=BTN_HELP)],
+        [KeyboardButton(text=BTN_HELP)],
     ]
     if is_supervisor(user_id):
-        rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_STATS)])
-        rows.append([KeyboardButton(text=BTN_PHOTOS), KeyboardButton(text=BTN_HISTORY)])
+        rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_PHOTOS)])
         rows.append([KeyboardButton(text=BTN_CATALOG)])
     if user_id in ADMIN_IDS:
         rows.append([KeyboardButton(text=BTN_CLOSE_SHIFT)])
@@ -685,33 +653,6 @@ def _parse_price_args(raw: str):
     if not (1 <= len(name) <= 40):
         return None, None
     return name, price
-
-
-def parse_rooms_spec(raw: str):
-    rooms = []
-    for token in (raw or "").replace(" ", "").split(","):
-        if not token:
-            continue
-        if "-" in token:
-            a, b = token.split("-", 1)
-            if not (a.isdigit() and b.isdigit()):
-                return None
-            a, b = int(a), int(b)
-            if a > b or b - a > 500:
-                return None
-            rooms.extend(str(x) for x in range(a, b + 1))
-        else:
-            if not ROOM_RE.fullmatch(token):
-                return None
-            rooms.append(token)
-        if len(rooms) > 2000:
-            return None
-    seen, out = set(), []
-    for room in rooms:
-        if room not in seen:
-            seen.add(room)
-            out.append(room)
-    return out
 
 
 # --- FSM СТАДИИ ---
@@ -779,7 +720,6 @@ async def cmd_help(message: Message):
         "      Отправьте фото мини-бара — отчёт уйдёт автоматически\n\n"
         "❌ გაუქმება / Отменить проверку: /cancel\n"
         "📊 ყველა ნომრის სია / Список номеров: /status\n"
-        "🕳 დარჩენილი ნომრები / Что осталось проверить: /remaining\n"
         "🆔 ჩემი ID / Мой ID: /myid\n\n"
         "⌨️ ყველა მოქმედება ხელმისაწვდომია მენიუს ღილაკებით ქვემოთ\n"
         "      (Все действия доступны кнопками меню под строкой ввода)"
@@ -790,9 +730,7 @@ async def cmd_help(message: Message):
             "\n\n<b>👔 სუპერვაიზერებისთვის / Для супервайзеров:</b>\n"
             "• /audit <code>605</code> — детали и фото по номеру\n"
             "• /product — сколько продукции осталось в номерах\n"
-            "• /stats — кто сколько номеров проверил\n"
             "• /photos — все фото смены альбомом\n"
-            "• /history — история закрытых смен\n"
             "• /catalog — текущий ассортимент и цены"
         )
     if message.from_user.id in ADMIN_IDS:
@@ -803,8 +741,7 @@ async def cmd_help(message: Message):
             "• /setqty <code>Wine 2</code> — изменить эталонное количество\n"
             f"• /setprice <code>Wine 25.50</code> — цена в {CURRENCY} (0 — убрать)\n"
             "• /renameitem <code>Cola Clasic | Cola Classic</code> — переименовать\n"
-            "• /delitem <code>Red Bull</code> — убрать товар из каталога\n"
-            "• /setrooms <code>601-612, 701-712</code> — список номеров отеля"
+            "• /delitem <code>Red Bull</code> — убрать товар из каталога"
         )
         if AUTO_CLEAR_TIME:
             text += f"\n⏰ Включено: автозакрытие смены в {AUTO_CLEAR_TIME} (Тбилиси)."
@@ -817,30 +754,6 @@ async def cmd_status(message: Message):
     all_summary = get_all_rooms_summary()
     status_message = f"📊 <b>მიმდინარე მდგომარეობა (სრული სია):</b>\n{all_summary}"
     await answer_chunked(message, status_message, reply_markup=main_menu_kb(message.from_user.id))
-
-
-@router.message(Command("remaining"))
-async def cmd_remaining(message: Message):
-    menu = main_menu_kb(message.from_user.id)
-    total, checked, remaining = get_remaining_rooms()
-    if total == 0:
-        await message.answer(
-            "ℹ️ სასტუმროს ნომრების სია არ არის მითითებული.\n"
-            "ადმინმა უნდა შეიყვანოს: /setrooms <code>601-612, 701-712</code>",
-            reply_markup=menu
-        )
-        return
-
-    if not remaining:
-        await message.answer(f"✅ ყველა ნომერი შემოწმებულია! 🎉 ({checked} / {total})", reply_markup=menu)
-        return
-
-    text = (
-        f"🕳 <b>დარჩენილი ნომრები (Осталось проверить):</b>\n"
-        f"შემოწმებულია: {checked} / {total}\n\n"
-        f"{esc(', '.join(remaining))}"
-    )
-    await answer_chunked(message, text, reply_markup=menu)
 
 
 @router.message(Command("audit"))
@@ -929,68 +842,6 @@ async def cmd_product(message: Message):
     await answer_chunked(message, msg, reply_markup=main_menu_kb(message.from_user.id))
 
 
-@router.message(Command("stats"))
-async def cmd_stats(message: Message):
-    if not is_supervisor(message.from_user.id):
-        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
-        return
-
-    stats = get_staff_stats()
-    if not stats:
-        await message.answer("ℹ️ ამ ცვლაში ჯერ არავის შეუმოწმებია ნომრები.")
-        return
-
-    medals = ["🥇", "🥈", "🥉"]
-    lines = ["🏆 <b>თანამშრომლების სტატისტიკა (за текущую смену):</b>", ""]
-    for i, (name, count) in enumerate(stats):
-        prefix = medals[i] if i < len(medals) else f"{i + 1}."
-        lines.append(f"{prefix} {esc(name)} — {count} ნომერი")
-    lines.append("")
-    lines.append(f"სულ შემოწმებულია: {sum(c for _, c in stats)}")
-    await answer_chunked(message, "\n".join(lines), reply_markup=main_menu_kb(message.from_user.id))
-
-
-@router.message(Command("history"))
-async def cmd_history(message: Message):
-    if not is_supervisor(message.from_user.id):
-        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
-        return
-
-    with closing(db_connect()) as conn:
-        rows = conn.execute(
-            "SELECT closed_at, rooms_checked, total_units, total_amount "
-            "FROM history ORDER BY id DESC LIMIT 14"
-        ).fetchall()
-        all_consumed = conn.execute("SELECT consumed_json FROM history").fetchall()
-
-    if not rows:
-        await message.answer("ℹ️ ისტორია ჯერ ცარიელია — არცერთი ცვლა არ დახურულა.")
-        return
-
-    lines = ["🗂 <b>ცვლების ისტორია (История смен):</b>", ""]
-    for closed_at, rooms_checked, units, amount in rows:
-        line = f"📅 {esc(closed_at)} — {rooms_checked} ნომ. · {units} ერთ."
-        if amount and amount > 0:
-            line += f" · 💰 {fmt_money(amount)}"
-        lines.append(line)
-
-    totals = {}
-    for (consumed_json,) in all_consumed:
-        try:
-            for name, qty in json.loads(consumed_json or "{}").items():
-                totals[name] = totals.get(name, 0) + int(qty)
-        except Exception:
-            pass
-    top = sorted(totals.items(), key=lambda kv: kv[1], reverse=True)[:5]
-    if top:
-        lines.append("")
-        lines.append("🔝 <b>ყველაზე პოპულარული (за всё время):</b>")
-        for i, (name, qty) in enumerate(top, start=1):
-            lines.append(f"{i}. {esc(name)} — {qty} ერთ.")
-
-    await answer_chunked(message, "\n".join(lines), reply_markup=main_menu_kb(message.from_user.id))
-
-
 @router.message(Command("photos"))
 async def cmd_photos(message: Message, bot: Bot):
     if not is_supervisor(message.from_user.id):
@@ -1068,7 +919,7 @@ async def process_clear_confirm(message: Message, state: FSMContext):
     await message.answer(_shift_result_text(result, auto=False), reply_markup=menu)
 
 
-# --- УПРАВЛЕНИЕ КАТАЛОГОМ И СПИСКОМ НОМЕРОВ ---
+# --- УПРАВЛЕНИЕ КАТАЛОГОМ ---
 @router.message(Command("catalog"))
 async def cmd_catalog(message: Message):
     if not is_supervisor(message.from_user.id):
@@ -1265,42 +1116,6 @@ async def cmd_renameitem(message: Message):
     await message.answer(text)
 
 
-@router.message(Command("setrooms"))
-async def cmd_setrooms(message: Message):
-    if message.from_user.id not in ADMIN_IDS:
-        await message.answer("⛔ მხოლოდ ადმინისტრატორისთვის.")
-        return
-
-    args = (message.text or "").split(maxsplit=1)
-    raw = args[1] if len(args) > 1 else ""
-    if not raw.strip():
-        total, _, _ = get_remaining_rooms()
-        await message.answer(
-            "⚠️ ფორმატი: /setrooms <code>601-612, 701-712, 805</code>\n"
-            "(Диапазоны через дефис, номера через запятую. Список полностью заменяется.)\n"
-            f"ახლა სიაშია: {total} ნომერი."
-        )
-        return
-
-    rooms = parse_rooms_spec(raw)
-    if rooms is None or not rooms:
-        await message.answer(
-            "❌ ვერ გავიგე სია. მაგალითი: /setrooms <code>601-612, 701-712, 805A</code>"
-        )
-        return
-
-    with closing(db_connect()) as conn:
-        conn.execute("DELETE FROM hotel_rooms")
-        conn.executemany("INSERT INTO hotel_rooms (room_number) VALUES (?)", [(room,) for room in rooms])
-        conn.commit()
-
-    schedule_bg(backup_db_to_r2())
-    await message.answer(
-        f"✅ სასტუმროს ნომრების სია განახლდა: <b>{len(rooms)}</b> ნომერი.\n"
-        f"შემოწმება: /remaining"
-    )
-
-
 # КНОПКИ ГЛАВНОГО МЕНЮ
 @router.message(StateFilter(None), F.text.in_(MENU_BUTTONS))
 async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
@@ -1309,18 +1124,12 @@ async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
         await cmd_start(message, state)
     elif text == BTN_STATUS:
         await cmd_status(message)
-    elif text == BTN_REMAINING:
-        await cmd_remaining(message)
     elif text == BTN_HELP:
         await cmd_help(message)
     elif text == BTN_PRODUCT:
         await cmd_product(message)
-    elif text == BTN_STATS:
-        await cmd_stats(message)
     elif text == BTN_PHOTOS:
         await cmd_photos(message, bot)
-    elif text == BTN_HISTORY:
-        await cmd_history(message)
     elif text == BTN_CATALOG:
         await cmd_catalog(message)
     elif text == BTN_CLOSE_SHIFT:
@@ -1595,28 +1404,18 @@ async def save_and_send_report(message: Message, state: FSMContext, bot: Bot,
     header_lines.append(f"🕒 {checked_at}")
     header_text = "\n".join(header_lines)
 
-    remaining_line = ""
-    total_hotel, _, remaining = get_remaining_rooms()
-    if total_hotel:
-        remaining_line = f"\n🕳 დარჩენილია შესამოწმებელი: {len(remaining)} / {total_hotel}"
-
-    footer = f"\n\n🔔 <b>პასუხისმგებლები:</b> {esc(SUPERVISORS)}" if SUPERVISORS else ""
-    summary_block = f"📊 <b>მიმდინარე მდგომარეობა (სრული სია):</b>\n{all_summary}{remaining_line}{footer}"
-    full_report = f"{header_text}\n\n{summary_block}"
+    summary_block = f"📊 <b>მიმდინარე მდგომარეობა (სრული სია):</b>\n{all_summary}"
 
     report_sent = True
     try:
         if photo_id:
             send_media = bot.send_document if photo_type == "document" else bot.send_photo
             media_kwargs = {"document": photo_id} if photo_type == "document" else {"photo": photo_id}
-            if len(full_report) <= MAX_CAPTION_LEN:
-                await send_media(REPORT_CHAT_ID, caption=full_report, **media_kwargs)
-            else:
-                caption = header_text if len(header_text) <= MAX_CAPTION_LEN else header_text[:MAX_CAPTION_LEN]
-                await send_media(REPORT_CHAT_ID, caption=caption, **media_kwargs)
-                await send_chunked(bot, REPORT_CHAT_ID, summary_block)
+            # Фотография отправляется с подробностями отчёта под ней
+            await send_media(REPORT_CHAT_ID, caption=header_text, **media_kwargs)
+            await send_chunked(bot, REPORT_CHAT_ID, summary_block)
         else:
-            await send_chunked(bot, REPORT_CHAT_ID, full_report)
+            await send_chunked(bot, REPORT_CHAT_ID, f"{header_text}\n\n{summary_block}")
     except Exception as e:
         report_sent = False
         logging.error(f"Не удалось отправить отчет в чат {REPORT_CHAT_ID}: {e}")
@@ -1706,12 +1505,9 @@ async def main():
         BotCommand(command="cancel", description="შემოწმების გაუქმება (Отменить проверку)"),
         BotCommand(command="help", description="ინსტრუქცია (Инструкция)"),
         BotCommand(command="status", description="ყველა ნომრის სტატუსი (Общий статус)"),
-        BotCommand(command="remaining", description="დარჩენილი ნომრები (Что осталось проверить)"),
         BotCommand(command="myid", description="ჩემი ID (Мой Telegram ID)"),
         BotCommand(command="audit", description="ნომრის აუდიტი (Аудит номера /audit <номер>)"),
         BotCommand(command="product", description="პროდუქციის ანგარიში (Отчет по продукции)"),
-        BotCommand(command="stats", description="სტატისტიკა (Кто сколько проверил)"),
-        BotCommand(command="history", description="ცვლების ისტორია (История смен)"),
         BotCommand(command="photos", description="ცვლის ფოტოები (Фото смены)"),
         BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)"),
         BotCommand(command="clear", description="ცვლის დახურვა (Закрыть смену)")
