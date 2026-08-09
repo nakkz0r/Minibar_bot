@@ -1,4 +1,4 @@
-aiogram>=3.0.0
-boto3
-aiohttp
-python-dotenv
+aiogram>=3.7,<4
+boto3>=1.34
+aiohttp>=3.9
+python-dotenv>=1.0

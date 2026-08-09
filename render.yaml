@@ -1,0 +1,34 @@
+# Конфигурация деплоя на Render (https://render.com)
+# Render подхватывает этот файл автоматически при создании сервиса из репозитория.
+# Значения секретов задаются в панели Render → Environment (sync: false).
+services:
+  - type: web
+    name: minibar-bot
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    healthCheckPath: /health
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: REPORT_CHAT_ID
+        sync: false
+      - key: SUPERVISORS
+        sync: false
+      - key: ADMIN_IDS
+        sync: false
+      - key: SUPERVISORS_IDS
+        sync: false
+      - key: AUTO_REPORT_TIME
+        sync: false
+      - key: AUTO_CLEAR_TIME
+        sync: false
+      - key: R2_ACCOUNT_ID
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: R2_BUCKET_NAME
+        sync: false
