@@ -30,7 +30,10 @@ load_dotenv()
 
 TOKEN = os.getenv("BOT_TOKEN", "8816528903:AAGQ5_RYSCg8O1OtLx6SwGQmz2PFzpA75b0")
 REPORT_CHAT_ID = int(os.getenv("REPORT_CHAT_ID", "-5521647972"))
-SUPERVISORS = os.getenv("SUPERVISORS", "@devadze_tamari, @BwpBatumiFO")
+SUPERVISORS = os.getenv("SUPERVISORS", "@BwpBatumiFO, @devadze_tamari, @ANNAMARIAAA24")
+
+admins_env = os.getenv("ADMIN_IDS", "853815002")
+ADMIN_IDS = [int(i.strip()) for i in admins_env.split(",") if i.strip().replace('-', '').isdigit()]
 
 supervisors_env = os.getenv("SUPERVISORS_IDS", "853815002")
 SUPERVISORS_IDS = [int(i.strip()) for i in supervisors_env.split(",") if i.strip().replace('-', '').isdigit()]
@@ -99,30 +102,18 @@ def get_all_rooms_summary():
         return "პარამეტრები ჯერ არ არის შევსებული."
     
     summary_lines = []
-    total_restock = {}
 
     for row in rows:
-        room, status, details, json_str = row[0], row[1], row[2], row[3]
-        if details:
-            summary_lines.append(f"• ნომერი {room}: {status} ({details})")
+        room, status, details = row[0], row[1], row[2]
+        if status in ("ცარიელია", "ცარიელია სტუმარმა ითხოვა გამოტანა"):
+            disp_status = "ცარიელია სტუმარმა ითხოვა გამოტანა"
+            summary_lines.append(f"• **ნომერი {room}**: {disp_status}")
+        elif status == "არ არის შევსებული" and details:
+            summary_lines.append(f"• **ნომერი {room}**: {status} ({details})")
         else:
-            summary_lines.append(f"• ნომერი {room}: {status}")
+            summary_lines.append(f"• **ნომერი {room}**: {status}")
 
-        if json_str:
-            try:
-                item_dict = json.loads(json_str)
-                for item_name, qty in item_dict.items():
-                    total_restock[item_name] = total_restock.get(item_name, 0) + qty
-            except Exception:
-                pass
-
-    result = "\n".join(summary_lines)
-    if total_restock:
-        restock_items_str = "\n".join([f"  • {item}: {qty} ცალი" for item, qty in sorted(total_restock.items())])
-        total_qty = sum(total_restock.values())
-        result += f"\n\n📦 **სულ შესავსებია საწყობიდან (Всего для пополнения): {total_qty} шт.**\n{restock_items_str}"
-    
-    return result
+    return "\n".join(summary_lines)
 
 # --- ВСПОМОГАТЕЛЬНЫЕ КНОПКИ ИНВЕНТАРИЗАЦИИ ---
 def build_inventory_keyboard(selected_items: dict):
@@ -169,13 +160,13 @@ async def cmd_start(message: Message, state: FSMContext):
 async def cmd_status(message: Message):
     all_summary = get_all_rooms_summary()
     status_message = f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}"
-    await message.answer(status_message)
+    await message.answer(status_message, parse_mode="Markdown")
 
 @router.message(Command("audit"))
 async def cmd_audit(message: Message, bot: Bot):
     user_id = message.from_user.id
     
-    if user_id not in SUPERVISORS_IDS:
+    if user_id not in SUPERVISORS_IDS and user_id not in ADMIN_IDS:
         await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
         return
 
@@ -210,17 +201,17 @@ async def cmd_audit(message: Message, bot: Bot):
 
     if photo_id:
         try:
-            await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text)
+            await bot.send_photo(message.chat.id, photo=photo_id, caption=audit_text, parse_mode="Markdown")
         except Exception:
-            await message.answer(audit_text)
+            await message.answer(audit_text, parse_mode="Markdown")
     else:
-        await message.answer(audit_text)
+        await message.answer(audit_text, parse_mode="Markdown")
 
 @router.message(Command("product", "Product"))
 async def cmd_product(message: Message):
     user_id = message.from_user.id
     
-    if user_id not in SUPERVISORS_IDS:
+    if user_id not in SUPERVISORS_IDS and user_id not in ADMIN_IDS:
         await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
         return
 
@@ -241,31 +232,37 @@ async def cmd_product(message: Message):
         return
 
     total_rooms_checked = len(rows)
-    total_missing = {}
+    total_present = {item_name: 0 for item_name in MINIBAR_CATALOG}
 
     for row in rows:
-        json_str = row[3]
-        if json_str:
-            try:
-                item_dict = json.loads(json_str)
-                for item_name, qty in item_dict.items():
-                    total_missing[item_name] = total_missing.get(item_name, 0) + qty
-            except Exception:
-                pass
+        status, json_str = row[1], row[3]
+        if status == "შევსებულია":
+            for item_name, max_qty in MINIBAR_CATALOG.items():
+                total_present[item_name] += max_qty
+        elif status == "არ არის შევსებული":
+            missing_dict = {}
+            if json_str:
+                try:
+                    missing_dict = json.loads(json_str)
+                except Exception:
+                    pass
+            for item_name, max_qty in MINIBAR_CATALOG.items():
+                missing_qty = missing_dict.get(item_name, 0)
+                present_qty = max(0, max_qty - missing_qty)
+                total_present[item_name] += present_qty
+        else:
+            # "ცარიელია სტუმარმა ითხოვა გამოტანა", "Out of order" -> 0 items present
+            pass
 
-    total_missing_count = sum(total_missing.values())
+    total_present_count = sum(total_present.values())
 
-    msg = f"📦 **პროდუქციის ანგარიში (Отчет по продукции во всех мини-барах)**\n\n"
-    msg += f"🏨 შემოწმებული ნომრები (Проверено номеров): {total_rooms_checked}\n\n"
+    msg = f"📦 **პროდუქციის ნაშთის ანგარიში (Наличие продукции в номерах)**\n\n"
+    msg += f"🏨 შემოწმებული ნომრები (Проверено номеров): {total_rooms_checked}\n"
+    msg += f"📊 **სულ არის ნომრებში (Всего в номерах): {total_present_count} шт.**\n\n"
 
-    if total_missing_count == 0:
-        msg += "✅ **ყველა მინი-ბარი სრულად შევსებულია! (Все мини-бары полные, израсходованных товаров нет).**"
-    else:
-        msg += f"⚠️ **სულ აკლია / შესავსებია (Всего израсходовано / к пополнению): {total_missing_count} шт.**\n\n"
-        for item_name, max_per_room in MINIBAR_CATALOG.items():
-            missing_qty = total_missing.get(item_name, 0)
-            if missing_qty > 0:
-                msg += f"• **{item_name}**: {missing_qty} ცალი\n"
+    for item_name, qty in total_present.items():
+        max_possible = MINIBAR_CATALOG[item_name] * total_rooms_checked
+        msg += f"• **{item_name}**: {qty} / {max_possible} ცალი\n"
 
     await message.answer(msg, parse_mode="Markdown")
 
@@ -273,8 +270,8 @@ async def cmd_product(message: Message):
 async def cmd_clear(message: Message):
     user_id = message.from_user.id
     
-    if user_id not in SUPERVISORS_IDS:
-        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ სუპერვაიზერებისთვის.")
+    if user_id not in ADMIN_IDS:
+        await message.answer("⛔ ეს ბრძანება ხელმისაწვდომია მხოლოდ ადმინისტრატორისთვის.")
         return
 
     conn = sqlite3.connect(DB_FILE)
@@ -295,7 +292,7 @@ async def process_room(message: Message, state: FSMContext):
     
     kb = ReplyKeyboardMarkup(keyboard=[
         [KeyboardButton(text="შევსებულია"), KeyboardButton(text="არ არის შევსებული")],
-        [KeyboardButton(text="ცარიელია"), KeyboardButton(text="Out of order")]
+        [KeyboardButton(text="ცარიელია სტუმარმა ითხოვა გამოტანა"), KeyboardButton(text="Out of order")]
     ], resize_keyboard=True)
     
     await message.answer("აირჩიეთ ნომრის სტატუსი:", reply_markup=kb)
@@ -303,33 +300,37 @@ async def process_room(message: Message, state: FSMContext):
 @router.message(ReportForm.status)
 async def process_status(message: Message, state: FSMContext):
     status_text = message.text
-    await state.update_data(status=status_text)
     
-    if status_text == "არ არის შევსებული":
-        await state.set_state(ReportForm.loss)
-        await state.update_data(selected_items={})
-        kb = build_inventory_keyboard({})
-        await message.answer(
-            "📋 **მონიშნეთ რომელი პროდუქცია აკლია (выберите выпитое):**\n"
-            "(Нажмите на товар, чтобы указать кол-во: 1 или 2)",
-            reply_markup=ReplyKeyboardRemove()
-        )
-        await message.answer(
-            "აირჩიეთ აკლებული პროდუქტები:",
-            reply_markup=kb
-        )
-    elif status_text == "ცარიელია":
+    if status_text in ("ცარიელია", "ცარიელია სტუმარმა ითხოვა გამოტანა"):
+        status_text = "ცარიელია სტუმარმა ითხოვა გამოტანა"
+        await state.update_data(status=status_text)
         full_missing = MINIBAR_CATALOG.copy()
         details_list = [f"{k}: {v}" for k, v in full_missing.items()]
         details_text = f"გამოყენებულია: {', '.join(details_list)} (სულ {TOTAL_FULL_ITEMS} ცალი)"
         json_str = json.dumps(full_missing)
         
         await state.update_data(loss=details_text, json_details=json_str)
-        await state.set_state(ReportForm.photo)
-        await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+        await save_and_send_report(message, state, message.bot, photo_id=None)
+    elif status_text == "არ არის შევსებული":
+        await state.update_data(status=status_text)
+        await state.set_state(ReportForm.loss)
+        await state.update_data(selected_items={})
+        kb = build_inventory_keyboard({})
+        await message.answer(
+            "📋 **მონიშნეთ რომელი პროდუქცია აკლია (выберите выпитое):**\n"
+            "(Нажмите на товар, чтобы указать кол-во: 1 или 2)",
+            reply_markup=ReplyKeyboardRemove(),
+            parse_mode="Markdown"
+        )
+        await message.answer(
+            "აირჩიეთ აკლებული პროდუქტები:",
+            reply_markup=kb
+        )
     elif "out of order" in status_text.lower():
+        await state.update_data(status=status_text)
         await save_and_send_report(message, state, message.bot, photo_id=None)
     else:
+        await state.update_data(status=status_text)
         await state.update_data(loss="", json_details="")
         await state.set_state(ReportForm.photo)
         await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
@@ -426,31 +427,41 @@ async def save_and_send_report(message: Message, state: FSMContext, bot: Bot, ph
 
     all_summary = get_all_rooms_summary()
     
-    if loss:
-        report_text = (
+    if loss and "ცარიელია" not in status:
+        header_text = (
             f"📦 **მინი-ბარის ანგარიში**\n\n"
             f"🏨 ნომერი: {room}\n"
             f"🟢 სტატუსი: {status}\n"
-            f"⚠️ გამოყენებულია: {loss}\n"
-            f"👤 თანამშრომელი: {message.from_user.full_name}\n\n"
-            f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
-            f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
+            f"⚠️ {loss}\n"
+            f"👤 თანამშრომელი: {message.from_user.full_name}"
         )
     else:
-        report_text = (
+        header_text = (
             f"📦 **მინი-ბარის ანგარიში**\n\n"
             f"🏨 ნომერი: {room}\n"
             f"🟢 სტატუსი: {status}\n"
-            f"👤 თანამშრომელი: {message.from_user.full_name}\n\n"
-            f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
-            f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
+            f"👤 თანამშრომელი: {message.from_user.full_name}"
         )
+
+    full_report = (
+        f"{header_text}\n\n"
+        f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
+        f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
+    )
     
     try:
         if photo_id:
-            await bot.send_photo(REPORT_CHAT_ID, photo=photo_id, caption=report_text)
+            if len(full_report) <= 1000:
+                await bot.send_photo(REPORT_CHAT_ID, photo=photo_id, caption=full_report, parse_mode="Markdown")
+            else:
+                await bot.send_photo(REPORT_CHAT_ID, photo=photo_id, caption=header_text, parse_mode="Markdown")
+                summary_msg = (
+                    f"📊 **მიმდინარე მდგომარეობა (სრული სია):**\n{all_summary}\n\n"
+                    f"🔔 **პასუხისმგებლები:** {SUPERVISORS}"
+                )
+                await bot.send_message(REPORT_CHAT_ID, text=summary_msg, parse_mode="Markdown")
         else:
-            await bot.send_message(REPORT_CHAT_ID, text=report_text)
+            await bot.send_message(REPORT_CHAT_ID, text=full_report, parse_mode="Markdown")
     except Exception as e:
         logging.error(f"Не удалось отправить отчет в чат {REPORT_CHAT_ID}: {e}")
 
