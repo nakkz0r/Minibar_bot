@@ -601,13 +601,10 @@ def is_supervisor(user_id: int) -> bool:
 BTN_STATUS = "📊 სტატუსი"
 BTN_HELP = "ℹ️ დახმარება"
 BTN_PRODUCT = "📦 პროდუქცია"
-BTN_PHOTOS = "📷 ფოტოები"
 BTN_CATALOG = "🛒 კატალოგი"
-BTN_CLOSE_SHIFT = "🗑 ცვლის დახურვა"
 
 MENU_BUTTONS = {
-    BTN_STATUS, BTN_HELP, BTN_PRODUCT,
-    BTN_PHOTOS, BTN_CATALOG, BTN_CLOSE_SHIFT,
+    BTN_STATUS, BTN_HELP, BTN_PRODUCT, BTN_CATALOG,
 }
 
 
@@ -617,10 +614,7 @@ def main_menu_kb(user_id: int) -> ReplyKeyboardMarkup:
         [KeyboardButton(text=BTN_STATUS), KeyboardButton(text=BTN_HELP)],
     ]
     if is_supervisor(user_id):
-        rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_PHOTOS)])
-        rows.append([KeyboardButton(text=BTN_CATALOG)])
-    if user_id in ADMIN_IDS:
-        rows.append([KeyboardButton(text=BTN_CLOSE_SHIFT)])
+        rows.append([KeyboardButton(text=BTN_PRODUCT), KeyboardButton(text=BTN_CATALOG)])
     return ReplyKeyboardMarkup(keyboard=rows, resize_keyboard=True)
 
 
@@ -1110,12 +1104,8 @@ async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
         await cmd_help(message)
     elif text == BTN_PRODUCT:
         await cmd_product(message)
-    elif text == BTN_PHOTOS:
-        await cmd_photos(message, bot)
     elif text == BTN_CATALOG:
         await cmd_catalog(message)
-    elif text == BTN_CLOSE_SHIFT:
-        await cmd_clear(message, state)
 
 
 # --- СЦЕНАРИЙ ПРОВЕРКИ НОМЕРА ---
@@ -1489,9 +1479,7 @@ async def main():
         BotCommand(command="help", description="ინსტრუქცია (Инструкция)"),
         BotCommand(command="myid", description="ჩემი ID (Мой Telegram ID)"),
         BotCommand(command="product", description="პროდუქციის ანგარიში (Отчет по продукции)"),
-        BotCommand(command="photos", description="ცვლის ფოტოები (Фото смены)"),
-        BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)"),
-        BotCommand(command="clear", description="ცვლის დახურვა (Закрыть смену)")
+        BotCommand(command="catalog", description="კატალოგი (Каталог мини-бара)")
     ]
     try:
         await bot.set_my_commands(commands)
