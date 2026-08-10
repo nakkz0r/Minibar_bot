@@ -695,13 +695,21 @@ async def clear_temp_messages(bot: Bot, chat_id: int, state: FSMContext):
     temp_ids = data.get("temp_msg_ids", [])
     if not temp_ids:
         return
-    unique_ids = list(dict.fromkeys(temp_ids))
-    for mid in unique_ids:
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=mid)
-        except Exception:
-            pass
+    unique_ids = [int(mid) for mid in list(dict.fromkeys(temp_ids))]
+    logging.info(f"Очистка {len(unique_ids)} временных сообщений в чате {chat_id}: {unique_ids}")
+    
+    try:
+        await bot.delete_messages(chat_id=chat_id, message_ids=unique_ids)
+    except Exception as e:
+        logging.info(f"Пакетное удаление не сработало ({e}), пробуем по одному...")
+        for mid in unique_ids:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception as ex:
+                logging.warning(f"Не удалось удалить сообщение {mid} в чате {chat_id}: {ex}")
+
     await state.update_data(temp_msg_ids=[])
+
 
 
 # --- ОСНОВНЫЕ КОМАНДЫ ---
