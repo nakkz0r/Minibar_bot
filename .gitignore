@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .idea/
 .vscode/
+bot_backup*.py
+

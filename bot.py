@@ -672,24 +672,59 @@ class ClearForm(StatesGroup):
 router = Router()
 
 
+# --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ДЛЯ ОЧИСТКИ ЧАТА ---
+async def track_msg(state: FSMContext, *items):
+    """Сохраняет ID сообщений во временном состоянии FSMContext для авто-удаления."""
+    if not state:
+        return
+    data = await state.get_data()
+    temp_ids = data.get("temp_msg_ids", [])
+    for item in items:
+        if isinstance(item, Message):
+            temp_ids.append(item.message_id)
+        elif isinstance(item, int):
+            temp_ids.append(item)
+    await state.update_data(temp_msg_ids=temp_ids)
+
+
+async def clear_temp_messages(bot: Bot, chat_id: int, state: FSMContext):
+    """Удаляет все накопленные промежуточные сообщения из чата."""
+    if not state:
+        return
+    data = await state.get_data()
+    temp_ids = data.get("temp_msg_ids", [])
+    if not temp_ids:
+        return
+    unique_ids = list(dict.fromkeys(temp_ids))
+    for mid in unique_ids:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=mid)
+        except Exception:
+            pass
+    await state.update_data(temp_msg_ids=[])
+
+
 # --- ОСНОВНЫЕ КОМАНДЫ ---
 @router.message(Command("start"))
-async def cmd_start(message: Message, state: FSMContext):
+async def cmd_start(message: Message, state: FSMContext, bot: Bot):
+    await clear_temp_messages(bot, message.chat.id, state)
     await state.clear()
     await state.set_state(ReportForm.room_number)
-    await message.answer(
+    bot_msg = await message.answer(
         "გამარჯობა! გთხოვთ, შეიყვანეთ ნომრის ნომერი (მაგალითად: 605):",
         reply_markup=ReplyKeyboardRemove()
     )
+    await track_msg(state, message, bot_msg)
 
 
 @router.message(Command("cancel"))
-async def cmd_cancel(message: Message, state: FSMContext):
+async def cmd_cancel(message: Message, state: FSMContext, bot: Bot):
     menu = main_menu_kb(message.from_user.id)
     current = await state.get_state()
     if current is None:
         await message.answer("გასაუქმებელი არაფერია. აირჩიეთ მოქმედება 👇", reply_markup=menu)
         return
+    await clear_temp_messages(bot, message.chat.id, state)
     await state.clear()
     await message.answer("❌ შემოწმება გაუქმებულია. აირჩიეთ მოქმედება 👇", reply_markup=menu)
 
@@ -1130,7 +1165,7 @@ async def cmd_renameitem(message: Message):
 async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
     text = message.text
     if text == BTN_CHECK:
-        await cmd_start(message, state)
+        await cmd_start(message, state, bot)
     elif text == BTN_STATUS:
         await cmd_status(message)
     elif text == BTN_HELP:
@@ -1148,10 +1183,11 @@ async def menu_buttons(message: Message, state: FSMContext, bot: Bot):
 async def process_room(message: Message, state: FSMContext):
     room = (message.text or "").strip()
     if not ROOM_RE.fullmatch(room):
-        await message.answer(
+        bot_msg = await message.answer(
             "⚠️ ნომრის ფორმატი არასწორია. გთხოვთ, შეიყვანეთ ნომერი ციფრებით "
             "(მაგალითად: 605):"
         )
+        await track_msg(state, message, bot_msg)
         return
 
     with closing(db_connect()) as conn:
@@ -1172,16 +1208,18 @@ async def process_room(message: Message, state: FSMContext):
             info += f" · 👤 {esc(ex_by)}"
         if ex_at:
             info += f" · 🕒 {esc(ex_at)}"
-        await message.answer(
+        bot_msg = await message.answer(
             f"⚠️ ნომერი <b>{esc(room)}</b> უკვე შემოწმებულია ამ ცვლაში:\n{info}\n\n"
             f"თავიდან შევამოწმოთ? (Перепроверить и перезаписать?)",
             reply_markup=kb
         )
+        await track_msg(state, message, bot_msg)
         return
 
     await state.update_data(room=room)
     await state.set_state(ReportForm.status)
-    await message.answer("აირჩიეთ ნომრის სტატუსი:", reply_markup=build_status_keyboard())
+    bot_msg = await message.answer("აირჩიეთ ნომრის სტატუსი:", reply_markup=build_status_keyboard())
+    await track_msg(state, message, bot_msg)
 
 
 @router.callback_query(ReportForm.room_number, F.data == "room_overwrite")
@@ -1197,7 +1235,8 @@ async def cb_room_overwrite(callback: CallbackQuery, state: FSMContext):
         await callback.message.edit_text(f"🔁 ნომერი {esc(room)} — ხელახალი შემოწმება:")
     except Exception:
         pass
-    await callback.message.answer("აირჩიეთ ნომრის სტატუსი:", reply_markup=build_status_keyboard())
+    bot_msg = await callback.message.answer("აირჩიეთ ნომრის სტატუსი:", reply_markup=build_status_keyboard())
+    await track_msg(state, bot_msg)
     await callback.answer()
 
 
@@ -1211,8 +1250,9 @@ async def cb_room_abort(callback: CallbackQuery):
 
 
 @router.message(ReportForm.room_number)
-async def process_room_invalid(message: Message):
-    await message.answer("⚠️ გთხოვთ, შეიყვანეთ ნომრის ნომერი ტექსტით (მაგალითად: 605):")
+async def process_room_invalid(message: Message, state: FSMContext):
+    bot_msg = await message.answer("⚠️ გთხოვთ, შეიყვანეთ ნომრის ნომერი ტექსტით (მაგალითად: 605):")
+    await track_msg(state, message, bot_msg)
 
 
 @router.message(ReportForm.status, F.text)
@@ -1229,34 +1269,40 @@ async def process_status(message: Message, state: FSMContext):
 
         await state.update_data(loss=details_text, json_details=json_str)
         await state.set_state(ReportForm.photo)
-        await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+        bot_msg = await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+        await track_msg(state, message, bot_msg)
     elif status_text == STATUS_NOT_FULL:
         await state.update_data(status=status_text, selected_items={}, loss=None, json_details=None)
         await state.set_state(ReportForm.loss)
         kb = build_inventory_keyboard({})
-        await message.answer(
+        msg1 = await message.answer(
             "📋 <b>მონიშნეთ რომელი პროდუქცია აკლია (выберите выпитое):</b>\n"
             "(Нажмите на товар, чтобы указать кол-во: 1 или 2)",
             reply_markup=ReplyKeyboardRemove()
         )
-        await message.answer("აირჩიეთ აკლებული პროდუქტები:", reply_markup=kb)
+        msg2 = await message.answer("აირჩიეთ აკლებული პროდუქტები:", reply_markup=kb)
+        await track_msg(state, message, msg1, msg2)
     elif "out of order" in status_text.lower():
         await state.update_data(status=status_text, loss="", json_details="")
+        await track_msg(state, message)
         await save_and_send_report(message, state, message.bot, photo_id=None)
     elif status_text == STATUS_FULL:
         await state.update_data(status=status_text, loss="", json_details="")
         await state.set_state(ReportForm.photo)
-        await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+        bot_msg = await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:", reply_markup=ReplyKeyboardRemove())
+        await track_msg(state, message, bot_msg)
     else:
-        await message.answer(
+        bot_msg = await message.answer(
             "⚠️ გთხოვთ, აირჩიოთ სტატუსი ღილაკებით 👇",
             reply_markup=build_status_keyboard()
         )
+        await track_msg(state, message, bot_msg)
 
 
 @router.message(ReportForm.status)
-async def process_status_invalid(message: Message):
-    await message.answer("⚠️ გთხოვთ, აირჩიოთ სტატუსი ღილაკებით 👇", reply_markup=build_status_keyboard())
+async def process_status_invalid(message: Message, state: FSMContext):
+    bot_msg = await message.answer("⚠️ გთხოვთ, აირჩიოთ სტატუსი ღილაკებით 👇", reply_markup=build_status_keyboard())
+    await track_msg(state, message, bot_msg)
 
 
 @router.callback_query(ReportForm.loss, F.data.startswith("item:"))
@@ -1316,19 +1362,22 @@ async def process_inventory_confirm(callback: CallbackQuery, state: FSMContext):
         )
     except Exception:
         pass
-    await callback.message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
+    bot_msg = await callback.message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
+    await track_msg(state, bot_msg)
     await callback.answer()
 
 
 @router.message(ReportForm.loss, F.photo | F.document)
 @router.message(ReportForm.photo, F.photo | F.document)
 async def process_photo(message: Message, state: FSMContext, bot: Bot):
+    await track_msg(state, message)
     if message.photo:
         photo_id, photo_type = message.photo[-1].file_id, "photo"
     else:
         mime = (message.document.mime_type or "")
         if not mime.startswith("image/"):
-            await message.answer("⚠️ გთხოვთ, გამოაგზავნოთ ფოტო (სურათი).")
+            bot_msg = await message.answer("⚠️ გთხოვთ, გამოაგზავნოთ ფოტო (სურათი).")
+            await track_msg(state, bot_msg)
             return
         photo_id, photo_type = message.document.file_id, "document"
 
@@ -1346,21 +1395,25 @@ async def process_photo(message: Message, state: FSMContext, bot: Bot):
 async def process_loss_text(message: Message, state: FSMContext):
     text = (message.text or "").strip()
     if not text:
-        await message.answer("აირჩიეთ პროდუქტები ღილაკებით ან დაწერეთ ტექსტით.")
+        bot_msg = await message.answer("აირჩიეთ პროდუქტები ღილაკებით ან დაწერეთ ტექსტით.")
+        await track_msg(state, message, bot_msg)
         return
     await state.update_data(loss=f"გამოყენებულია: {text}", json_details="")
     await state.set_state(ReportForm.photo)
-    await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
+    bot_msg = await message.answer("გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება:")
+    await track_msg(state, message, bot_msg)
 
 
 @router.message(ReportForm.loss)
-async def process_loss_other(message: Message):
-    await message.answer("აირჩიეთ პროდუქტები ღილაკებით, დაწერეთ ტექსტით ან გამოაგზავნეთ ფოტო. გაუქმება: /cancel")
+async def process_loss_other(message: Message, state: FSMContext):
+    bot_msg = await message.answer("აირჩიეთ პროდუქტები ღილაკებით, დაწერეთ ტექსტით ან გამოაგზავნეთ ფოტო. გაუქმება: /cancel")
+    await track_msg(state, message, bot_msg)
 
 
 @router.message(ReportForm.photo)
-async def process_photo_invalid(message: Message):
-    await message.answer("📷 გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება. გაუქმება: /cancel")
+async def process_photo_invalid(message: Message, state: FSMContext):
+    bot_msg = await message.answer("📷 გთხოვთ, გამოაგზავნოთ ფოტო-მტკიცებულება. გაუქმება: /cancel")
+    await track_msg(state, message, bot_msg)
 
 
 async def save_and_send_report(message: Message, state: FSMContext, bot: Bot,
@@ -1428,8 +1481,9 @@ async def save_and_send_report(message: Message, state: FSMContext, bot: Bot,
         logging.error(f"Не удалось отправить отчет в чат {REPORT_CHAT_ID}: {e}")
 
     menu = main_menu_kb(message.from_user.id if message.from_user else 0)
+    await clear_temp_messages(bot, message.chat.id, state)
     if report_sent:
-        await message.answer("ანგარიში წარმატებით გაიგზავნა! ✅", reply_markup=menu)
+        await message.answer(f"✅ ნომერი <b>{esc(room)}</b> შემოწმებულია! (Отчёт отправлен)", reply_markup=menu)
     else:
         await message.answer(
             "⚠️ მონაცემები შენახულია, მაგრამ ანგარიშის გაგზავნა ჯგუფში ვერ მოხერხდა. "
