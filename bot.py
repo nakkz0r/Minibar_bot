@@ -1475,18 +1475,38 @@ async def save_and_send_report(message: Message, state: FSMContext, bot: Bot,
     summary_block = f"📊 <b>მიმდინარე მდგომარეობა (სრული სია):</b>\n{all_summary}"
 
     report_sent = True
+    target_chat = REPORT_CHAT_ID
+    err_detail = ""
     try:
         if photo_id:
             send_media = bot.send_document if photo_type == "document" else bot.send_photo
             media_kwargs = {"document": photo_id} if photo_type == "document" else {"photo": photo_id}
-            # Фотография отправляется с подробностями отчёта под ней
-            await send_media(REPORT_CHAT_ID, caption=header_text, **media_kwargs)
-            await send_chunked(bot, REPORT_CHAT_ID, summary_block)
+            await send_media(target_chat, caption=header_text, **media_kwargs)
+            await send_chunked(bot, target_chat, summary_block)
         else:
-            await send_chunked(bot, REPORT_CHAT_ID, f"{header_text}\n\n{summary_block}")
+            await send_chunked(bot, target_chat, f"{header_text}\n\n{summary_block}")
     except Exception as e:
-        report_sent = False
-        logging.error(f"Не удалось отправить отчет в чат {REPORT_CHAT_ID}: {e}")
+        err_detail = str(e)
+        logging.error(f"Не удалось отправить отчет в REPORT_CHAT_ID ({target_chat}): {e}", exc_info=True)
+        # Пробуем отправить в текущий чат, если он отличается
+        if message and message.chat and message.chat.id != target_chat:
+            try:
+                if photo_id:
+                    send_media = bot.send_document if photo_type == "document" else bot.send_photo
+                    media_kwargs = {"document": photo_id} if photo_type == "document" else {"photo": photo_id}
+                    await send_media(message.chat.id, caption=header_text, **media_kwargs)
+                    await send_chunked(bot, message.chat.id, summary_block)
+                else:
+                    await send_chunked(bot, message.chat.id, f"{header_text}\n\n{summary_block}")
+            except Exception as ex:
+                err_detail = str(ex)
+                logging.error(f"Фоллбек отправка в текущий чат {message.chat.id} тоже не удалась: {ex}")
+                report_sent = False
+        else:
+            report_sent = False
+
+    # Пауза 5 секунд, чтобы Telegram успел гарантированно доставить отчет перед очисткой
+    await asyncio.sleep(5)
 
     menu = main_menu_kb(message.from_user.id if message.from_user else 0)
     await clear_temp_messages(bot, message.chat.id, state)
@@ -1494,11 +1514,12 @@ async def save_and_send_report(message: Message, state: FSMContext, bot: Bot,
         await message.answer(f"✅ ნომერი <b>{esc(room)}</b> შემოწმებულია! (Отчёт отправлен)", reply_markup=menu)
     else:
         await message.answer(
-            "⚠️ მონაცემები შენახულია, მაგრამ ანგარიშის გაგზავნა ჯგუფში ვერ მოხერხდა. "
-            "(Данные сохранены, но отчёт в рабочий чат не ушёл — сообщите администратору.)",
+            f"⚠️ მონაცემები შენახულია, მაგრამ ანგარიშის გაგზავნა ვერ მოხერხდა.\n"
+            f"<code>Ошибка Telegram: {esc(err_detail)}</code>",
             reply_markup=menu
         )
     await state.clear()
+
 
 
 @router.message(StateFilter(None))
